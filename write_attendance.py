@@ -4,167 +4,106 @@ from firebase_admin import credentials, db
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-
 # Firebaseアプリの初期化（未初期化の場合のみ実行）
-def initialize_firebase():
-    if not firebase_admin._apps:
-        print("Initializing Firebase app...")
-        cred = credentials.Certificate('/tmp/firebase_service_account.json')
-        firebase_admin.initialize_app(cred, {
-            'databaseURL': 'https://test-51ebc-default-rtdb.firebaseio.com/'
-        })
+if not firebase_admin._apps:
+    # サービスアカウントの認証情報を設定
+    cred = credentials.Certificate('/tmp/firebase_service_account.json')
+    # Firebaseアプリを初期化
+    firebase_admin.initialize_app(cred, {
+        'databaseURL': 'https://test-51ebc-default-rtdb.firebaseio.com/'
+    })
 
+# Google Sheets API用のスコープを設定
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
-# Google Sheets APIのクライアントを初期化
-def initialize_google_sheets():
-    print("Authenticating Google Sheets API...")
-    scope = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive"
-    ]
-    creds = ServiceAccountCredentials.from_json_keyfile_name('/tmp/gcp_service_account.json', scope)
-    return gspread.authorize(creds)
-
+# Googleサービスアカウントから資格情報を取得
+creds = ServiceAccountCredentials.from_json_keyfile_name('/tmp/gcp_service_account.json', scope)
+client = gspread.authorize(creds)
 
 # Firebaseからデータを取得する関数
 def get_data_from_firebase(path):
-    try:
-        print(f"Fetching data from Firebase: Path={path}")
-        ref = db.reference(path)
-        data = ref.get()
-        print(f"Data retrieved from {path}: {data}")
-        return data
-    except Exception as e:
-        print(f"Error fetching data from Firebase: {e}")
-        return None
-
+    ref = db.reference(path)
+    return ref.get()
 
 # 時刻フォーマットの変換
-def parse_time(time_str):
-    try:
-        print(f"Parsing time string: {time_str}")
-        start, end = time_str.split("~")
-        start_time = datetime.datetime.strptime(start, "%H%M")
-        end_time = datetime.datetime.strptime(end, "%H%M")
-        print(f"Parsed times - Start: {start_time}, End: {end_time}")
-        return start_time, end_time
-    except ValueError:
-        print(f"Invalid time format: {time_str}")
-        return None, None
-
+def parse_time(time_str, fmt="%H%M~%H%M"):
+    start, end = time_str.split("~")
+    start_time = datetime.datetime.strptime(start, "%H%M")
+    end_time = datetime.datetime.strptime(end, "%H%M")
+    return start_time, end_time
 
 # 日時フォーマットの変換
-def parse_datetime(dt_str):
-    try:
-        print(f"Parsing datetime string: {dt_str}")
-        dt = datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-        print(f"Parsed datetime: {dt}")
-        return dt
-    except ValueError:
-        print(f"Invalid datetime format: {dt_str}")
-        return None
-
-
-# 出席データの判定処理
-def evaluate_attendance(entry_time, exit_time, start_time, end_time):
-    if entry_time is None or exit_time is None:
-        return "✕"
-    if entry_time > exit_time:
-        return "✕"
-    elif entry_time <= start_time + datetime.timedelta(minutes=5) and exit_time <= end_time + datetime.timedelta(minutes=5):
-        return "〇"
-    elif entry_time > start_time + datetime.timedelta(minutes=5) and exit_time <= end_time + datetime.timedelta(minutes=5):
-        late_minutes = (entry_time - start_time).seconds // 60
-        return f"△遅{late_minutes}分"
-    elif entry_time <= start_time + datetime.timedelta(minutes=5) and exit_time < end_time - datetime.timedelta(minutes=5):
-        early_leave_minutes = (end_time - exit_time).seconds // 60
-        return f"△早{early_leave_minutes}分"
-    else:
-        return "✕"
-
-
-# Googleシートの更新
-def update_google_sheet(sheet, course_row, day_column, status):
-    try:
-        print(f"Updating Google Sheet: Row={course_row}, Column={day_column}, Status={status}")
-        sheet.update_cell(course_row, day_column, status)
-        print("Google Sheet updated successfully.")
-    except Exception as e:
-        print(f"Error updating Google Sheet: {e}")
-
+def parse_datetime(dt_str, fmt="%Y-%m-%d %H:%M:%S"):
+    return datetime.datetime.strptime(dt_str, fmt)
 
 # メイン処理
 def main():
-    print("Starting main process...")
-
-    # 初期化
-    initialize_firebase()
-    client = initialize_google_sheets()
-
-    # データ取得
+    # Firebaseから必要なデータを取得
     attendance_data = get_data_from_firebase("Students/attendance/student_id")
     student_info_data = get_data_from_firebase("Students/student_info/student_index")
     enrollment_data = get_data_from_firebase("Students/enrollment/student_index")
-    courses_data = get_data_from_firebase("Courses").get("course_id", [])
+    courses_data = get_data_from_firebase("Courses")
 
-    if not attendance_data or not student_info_data or not enrollment_data or not courses_data:
-        print("Failed to fetch required data. Exiting...")
-        return
-
-    # 学生ごとの出席データを処理
+    # 各学生の出席記録を処理
     for student_id, attendance in attendance_data.items():
-        print(f"Processing attendance data for Student ID: {student_id}...")
         student_index = get_data_from_firebase(f"Students/student_info/student_id/{student_id}/student_index")
-    
         if not student_index:
-            print(f"No student index found for Student ID: {student_id}")
             continue
-    
+
+        # 学生が登録しているコースを取得
         course_ids = enrollment_data.get(student_index, {}).get("course_id", "").split(", ")
-        print(f"Student ID {student_id} is enrolled in courses: {course_ids}")
-    
         for course_id in course_ids:
             if not course_id:
-                print(f"No valid course ID found for Student ID: {student_id}")
                 continue
-    
-            # コースデータの取得
-            course_data = next(
-                (course for course in courses_data if isinstance(course, dict) and str(course.get("id")) == course_id),
-                None
-            )
-            if not course_data:
-                print(f"No course data found for Course ID: {course_id}")
-                continue
-    
-            # スケジュールの取得
-            schedule = course_data.get("schedule", {}).get("time", "")
+
+            # コースのスケジュールを取得
+            schedule = courses_data.get(int(course_id), {}).get("schedule", {}).get("time", "")
             if not schedule:
-                print(f"No schedule found for Course ID: {course_id}")
                 continue
-    
+
+            # スケジュールの開始・終了時刻を解析
             start_time, end_time = parse_time(schedule)
-    
-            # 出席データの判定と更新
+
+            # 出席記録を解析
             for entry_key, entry_data in attendance.items():
                 if not entry_key.startswith("entry"):
                     continue
-    
                 entry_time = parse_datetime(entry_data["read_datetime"])
                 exit_key = entry_key.replace("entry", "exit")
-                exit_time = parse_datetime(attendance.get(exit_key, {}).get("read_datetime"))
-    
-                status = evaluate_attendance(entry_time, exit_time, start_time, end_time)
-                print(f"Entry Time: {entry_time}, Exit Time: {exit_time}, Status: {status}")
-    
-                # Googleシートの更新
-                sheet_id = student_info_data.get(student_index, {}).get("sheet_id", "")
-                if sheet_id:
-                    sheet = client.open_by_key(sheet_id).worksheet(datetime.datetime.now().strftime("%Y-%m"))
-                    day_column = entry_time.day if entry_time else 0
-                    course_row = int(course_id)
-                    update_google_sheet(sheet, course_row, day_column, status)
+                exit_time = parse_datetime(attendance.get(exit_key, {}).get("read_datetime", start_time.strftime("%Y-%m-%d %H:%M:%S")))
 
+                # 欠席、出席、遅刻、早退の判定
+                if entry_time > exit_time:
+                    status = "✕"  # 欠席
+                elif entry_time <= start_time + datetime.timedelta(minutes=5) and exit_time <= end_time + datetime.timedelta(minutes=5):
+                    status = "〇"  # 出席
+                elif entry_time > start_time + datetime.timedelta(minutes=5) and exit_time <= end_time + datetime.timedelta(minutes=5):
+                    late_minutes = (entry_time - start_time).seconds // 60
+                    status = f"△遅{late_minutes}分"  # 遅刻
+                elif entry_time <= start_time + datetime.timedelta(minutes=5) and exit_time < end_time - datetime.timedelta(minutes=5):
+                    early_leave_minutes = (end_time - exit_time).seconds // 60
+                    status = f"△早{early_leave_minutes}分"  # 早退
+                else:
+                    status = "✕"  # その他は欠席とみなす
+
+                # Firebaseに保存する（必要に応じて更新）
+                if status in ["〇", "△遅", "△早"]:
+                    # exit1やentry2を調整
+                    if exit_time > end_time + datetime.timedelta(minutes=5):
+                        new_exit_time = end_time
+                        new_entry_time = end_time + datetime.timedelta(minutes=10)
+                        attendance[exit_key] = {"read_datetime": new_exit_time.strftime("%Y-%m-%d %H:%M:%S")}
+                        attendance[f"entry{int(entry_key[-1]) + 1}"] = {"read_datetime": new_entry_time.strftime("%Y-%m-%d %H:%M:%S")}
+                        ref = db.reference(f"Students/attendance/student_id/{student_id}")
+                        ref.update(attendance)
+
+            # Google Sheetsに記録
+            sheet_id = student_info_data.get(student_index, {}).get("sheet_id", "")
+            if sheet_id:
+                sheet = client.open_by_key(sheet_id).worksheet(datetime.datetime.now().strftime("%Y-%m"))
+                day_column = entry_time.day + 1
+                course_row = int(course_id) + 1
+                sheet.update_cell(course_row, day_column, status)
 
 if __name__ == "__main__":
     main()
