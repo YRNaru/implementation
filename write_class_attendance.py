@@ -3,7 +3,6 @@ import firebase_admin
 from firebase_admin import credentials, db
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-
 # ---------------------
 # Firebase & GSpread初期化
 # ---------------------
@@ -13,7 +12,6 @@ if not firebase_admin._apps:
         'databaseURL': 'https://test-51ebc-default-rtdb.firebaseio.com/'
     })
     print("Firebase initialized.")
-
 scope = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive"
@@ -21,7 +19,6 @@ scope = [
 creds = ServiceAccountCredentials.from_json_keyfile_name('/tmp/gcp_service_account.json', scope)
 gclient = gspread.authorize(creds)
 print("Google Sheets API authorized.")
-
 # ---------------------
 # Firebaseアクセス関連
 # ---------------------
@@ -32,7 +29,6 @@ def get_data_from_firebase(path):
     if data is None:
         print(f"No data found at path: {path}")
     return data
-
 # ---------------------
 # ヘルパー関数
 # ---------------------
@@ -45,8 +41,18 @@ def get_current_date_details():
 
 def map_date_to_column(day_of_month):
     # 日付を列番号にマッピング (例: 1 -> 3, 26 -> 28)
-    return day_of_month + 2
 
+    
+        
+          
+    
+
+        
+        Expand All
+    
+    @@ -51,113 +51,170 @@ def get_student_indices(student_indices_str):
+  
+    return day_of_month + 2
 def get_student_indices(student_indices_str):
     # "E523, E534" のような文字列をリストに変換
     return [s.strip() for s in student_indices_str.split(',')]
